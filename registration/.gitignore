@@ -2,7 +2,7 @@ build/*
 
 
 /*
-#!/*/ #全フォルダ以外
+!/*/
 !CMakeLists.txt
 !README.md
 !/*.png
