@@ -1,4 +1,4 @@
-# ICPアルゴリズム
+# 点群マッチングアルゴリズム
 
 ## Compile & Execute
 
@@ -9,9 +9,10 @@ cmake ..
 make
 
 ../icp
+../svd_scale
 ```
 
-## Detail
+## ICP
 
 簡単なフローは  
 1. ５個の点をランダムに作成しinputとする
