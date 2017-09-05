@@ -11,6 +11,7 @@
 
 #include <math.h>
 #include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/registration/icp.h>
 
 using namespace std;
 
@@ -20,6 +21,15 @@ enum methods {
   LM
 };
 
+void print4x4Matrix (const Eigen::Matrix4f & matrix)
+{
+  printf ("Rotation matrix :\n");
+  printf ("    | %6.3f %6.3f %6.3f | \n", matrix (0, 0), matrix (0, 1), matrix (0, 2));
+  printf ("R = | %6.3f %6.3f %6.3f | \n", matrix (1, 0), matrix (1, 1), matrix (1, 2));
+  printf ("    | %6.3f %6.3f %6.3f | \n", matrix (2, 0), matrix (2, 1), matrix (2, 2));
+  printf ("Translation vector :\n");
+  printf ("t = < %6.3f, %6.3f, %6.3f >\n\n", matrix (0, 3), matrix (1, 3), matrix (2, 3));
+}
 
 int main (int argc, char** argv)
 {
@@ -61,6 +71,7 @@ int main (int argc, char** argv)
   
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_source ( new pcl::PointCloud<pcl::PointXYZ> () );
   pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_target ( new pcl::PointCloud<pcl::PointXYZ> () );
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_source_trans ( new pcl::PointCloud<pcl::PointXYZ> () );
   
   // create random source point cloud
   for (int i = 0; i < 1000; i++) {
@@ -119,7 +130,6 @@ int main (int argc, char** argv)
       estPtr.reset ( new pcl::registration::TransformationEstimationLM < pcl::PointXYZ, pcl::PointXYZ > () );
       break;
     }
-
     
   Eigen::Affine3f transformation_est;
   estPtr->estimateRigidTransformation ( *cloud_source,
@@ -135,24 +145,72 @@ int main (int argc, char** argv)
   }
   std::cout << "estimated transformation " << std::endl << transformation_est.matrix()  << std::endl;
 
-  // viewer 作成
-  if(0){// Not Iterative
-	boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer (new pcl::visualization::PCLVisualizer ("3D Viewer"));
-	pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> color1 (cloud_source, 0, 255, 0);
-	pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> color2 (cloud_target, 255, 0, 0);
+  // viewer
+  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer (new pcl::visualization::PCLVisualizer ("3D Viewer"));
+  pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> color_source (cloud_source, 100, 155, 0);
+  viewer->addPointCloud<pcl::PointXYZ> (cloud_source, color_source, "source");
+  viewer->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "source");
   
-	viewer->setBackgroundColor (0, 0, 0);
-	viewer->addPointCloud<pcl::PointXYZ> (cloud_source, color1, "source");
-	viewer->addPointCloud<pcl::PointXYZ> (cloud_target, color2, "target");
-	viewer->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 1, "source");
-	viewer->addCoordinateSystem (1.0);
-	viewer->initCameraParameters ();
-  
-	viewer->spin();
-  }else{// Iterative
-	
-  }
+  pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> color_target (cloud_target, 155, 150, 0);
+  viewer->addPointCloud<pcl::PointXYZ> (cloud_target, color_target, "target");
+  viewer->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "target");
+
+  pcl::visualization::PointCloudColorHandlerCustom<pcl::PointXYZ> color_trans (cloud_target, 255, 5, 30);
+  cloud_source_trans = cloud_source;
+  viewer->addPointCloud<pcl::PointXYZ> (cloud_source_trans, color_trans, "trans");
+  viewer->setPointCloudRenderingProperties (pcl::visualization::PCL_VISUALIZER_POINT_SIZE, 2, "trans");
 
   
+  viewer->setBackgroundColor (0, 0, 0);
+  viewer->addCoordinateSystem (1.0);
+  viewer->setCameraPosition(-6.22997, -7.03095, -24.7261, -0.163784, 0.958968, -0.231419);
+  
+  viewer->spinOnce();
+  boost::this_thread::sleep (boost::posix_time::microseconds (1000000));
+
+  //IterativeClosestPoint<PointXYZ, PointXYZ> icp;
+  pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ>::Ptr icp ( new pcl::IterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> () );
+  icp->setTransformationEstimation(estPtr);// default:point-to-point
+  icp->setInputSource(cloud_source);
+  icp->setInputTarget(cloud_target);
+  icp->setMaximumIterations(50);
+  icp->align ( *cloud_source_trans );
+  if(icp->hasConverged()){
+	transformation_est.matrix() = icp->getFinalTransformation ().cast<float>();
+	print4x4Matrix (transformation_est.matrix());
+  }
+
+  viewer->updatePointCloud ( cloud_source_trans, color_trans, "trans" );
+  viewer->spin();
+  boost::this_thread::sleep (boost::posix_time::microseconds (1000000));
+  
+  int iterations(1);
+  while ( !viewer->wasStopped() )
+	{
+	  // registration
+	  icp->align ( *cloud_source_trans );
+    
+	  if ( icp->hasConverged() )
+		{
+		  viewer->updatePointCloud ( cloud_source_trans, color_trans, "trans" );
+		  //std::cout << icp->getFitnessScore() << std::endl;
+		  std::cout << "\nICP transformation " << ++iterations << " : cloud_icp -> cloud_in" << std::endl;
+		  transformation_est.matrix() *= icp->getFinalTransformation ().cast<float>();  // WARNING /!\ This is not accurate! For "educational" purpose only!
+		  print4x4Matrix (transformation_est.matrix());  // Print the transformation between original pose and current pose
+
+		  //ss.str ("");
+		  //ss << iterations;
+		  //std::string iterations_cnt = "ICP iterations = " + ss.str ();
+		  //viewer.updateText (iterations_cnt, 10, 60, 16, txt_gray_lvl, txt_gray_lvl, txt_gray_lvl, "iterations_cnt");
+		  //viewer.updatePointCloud (cloud_icp, cloud_icp_color_h, "cloud_icp_v2");
+		}
+	  else
+		std::cout << "Not converged." << std::endl;
+    
+	  viewer->spinOnce();
+	  boost::this_thread::sleep (boost::posix_time::microseconds (100000));
+	}
+
+
   return ( 0 );
 }
